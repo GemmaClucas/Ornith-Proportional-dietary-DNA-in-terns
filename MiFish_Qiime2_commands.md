@@ -1,0 +1,339 @@
+Qiime2 commands
+================
+Gemma Clucas
+2023-01-31
+
+The samples for this project were analysed across multiple plates to
+reduce batch effects. Each plate was run separately through steps 1-3 to
+allow the sequencing error rate to vary across plates in the denoising
+step. Other seabird samples were sequenced alongside the tern samples,
+but these will be filtered out in step 10.
+
+## 1. Importing the data into Qiime2
+
+Load qiime environment and create list of plates.
+
+    conda activate qiime2-2021.4
+
+    plates=(1 2 3 4 7 8 9 10 11 12 13 14 17)
+
+
+    for K in "${plates[@]}"; do
+      qiime tools import\
+        --type 'SampleData[PairedEndSequencesWithQuality]'\
+        --input-path /Volumes/Data_SS1/MiFish/Plate$K/reads \
+        --input-format CasavaOneEightSingleLanePerSampleDirFmt\
+        --output-path demux_plate$K.qza
+
+    for K in "${plates[@]}"; do
+      qiime demux summarize \
+        --i-data demux_Plate$K.qza \
+        --o-visualization demux_Plate$K.qzv
+    done
+
+## 2. Trim primers with cutadapt plugin
+
+F primer: GTCGGTAAAACTCGTGCCAGC (21 bp)  
+R primer: CATAGTGGGGTATCTAATCCCAGTTTG (27 bp)
+
+### Trim 3’ ends first
+
+At the 3’ end of the read, the primer will have been read through after
+reading the MiFish sequence. I need to be looking for the reverse
+complement of the reverse primer in R1 (`—p-adapter-f`) and the reverse
+complement of the forward primer in R2 (`—p-adapter-r`)
+
+F primer reverse complement: GCTGGCACGAGTTTTACCGAC  
+R primer reverse complement: CAAACTGGGATTAGATACCCCACTATG
+
+    for K in "${plates[@]}"; do
+      qiime cutadapt trim-paired \
+        --i-demultiplexed-sequences demux_plate$K.qza \
+        --p-adapter-f CAAACTGGGATTAGATACCCCACTATG \
+        --p-adapter-r GCTGGCACGAGTTTTACCGAC \
+        --o-trimmed-sequences trimd_plate$K.qza \
+        --verbose > cutadapt_out_plate$K.txt
+    done
+
+To see how much data passed the filter for each sample:
+
+    for K in "${plates[@]}"; do
+      grep "Total written (filtered):" cutadapt_out_Plate$K.txt 
+    done
+
+- Plate 1 ~ 80%.
+- Plate 2 ~ very variable, a lot around 50%.
+- Plate 3 ~ 80%.
+- Plate 4 ~ 80%.
+- Plate 7 ~ 75%.  
+- Plate 8 ~ very variable, a lot around 65%.
+- Plate 9 ~ 75%.
+- Plate 10 ~ 75%.
+- Plate 11 ~ very variable, a lot around 70%.
+- Plate 12 ~ very variable, a lot around 70%.
+- Plate 13 ~ 70%.
+- Plate 14 ~ 75%.
+- Plate 17 ~ very variable, a lot around 70 %.
+
+### Trim 5’ ends of reads
+
+All R1 should begin with the forward primer: GTCGGTAAAACTCGTGCCAGC (21
+bases).  
+All R2 should begin with the reverse primer: CATAGTGGGGTATCTAATCCCAGTTTG
+(27 bases).
+
+Trim these with the following commands:
+
+    for K in "${plates[@]}"; do
+      qiime cutadapt trim-paired \
+        --i-demultiplexed-sequences trimd_plate$K.qza \
+        --p-front-f GTCGGTAAAACTCGTGCCAGC \
+        --p-front-r CATAGTGGGGTATCTAATCCCAGTTTG \
+        --o-trimmed-sequences trimd2_plate$K.qza \
+        --verbose > cutadapt_out2_plate$K.txt
+    done
+
+To see how much data passed the filter for each sample:
+
+    for K in "${plates[@]}"; do
+      grep "Total written (filtered):" cutadapt_out2_plate$K.txt 
+    done
+
+About 85% of the data is passing the filter very consistently this time,
+which is the usual amount.
+
+## 3. Denoise with dada2
+
+Prior to denoising, sequences are trimmed to a length of 133 and 138 bp
+for forward and reverse reads, respectively, and merged requiring a
+minimum overlap of 50 base pairs to prevent spurious overlaps. I found
+these settings maximized the number of paired-end reads that could be
+merged without losing sequences due to low-quality bases being retained
+at the ends of reads while also preventing incorrect merging of
+paired-end reads with shorter overlaps. The predicted overlap for the
+MiFish amplicon with 250 bp paired-end sequencing and our trimming
+parameters is roughly 80-90 bp in length, so setting a minimum of 50 bp
+should be more than adequate (default is 12).
+
+    for K in "${plates[@]}"; do
+      qiime dada2 denoise-paired \
+        --i-demultiplexed-seqs trimd2_plate$K.qza \
+        --p-trunc-len-f 133 \
+        --p-trunc-len-r 138 \
+        --p-trim-left-f 0 \
+        --p-trim-left-r 0 \
+        --p-min-overlap 50 \
+        --p-n-threads 12 \
+        --o-representative-sequences rep-seqs_plate$K \
+        --o-table table_plate$K \
+        --o-denoising-stats denoise_plate$K
+    done
+
+Create visualizations for the denoising stats.
+
+    for K in "${plates[@]}"; do 
+      qiime metadata tabulate\
+        --m-input-file denoise_plate$K.qza\
+        --o-visualization denoise_plate$K.qzv
+    done
+
+Denoising stats look good.
+
+## 4. Merge all plates
+
+I need to merge both the feature tables, which contain the counts of
+each feature, and the rep-seqs, which contain the actual sequences for
+each feature. I am using the sum overlap method, because I seem to have
+included one of the troppy samples on both plates 16 and 17 (although
+this is not important for the fecal DNA vs visual observation study).
+
+Note that this requires metadata for each sample, contained in
+`mdat.txt`.
+
+    qiime feature-table merge \
+      --i-tables table_plate1.qza \
+      --i-tables table_plate2.qza \
+      --i-tables table_plate3.qza \
+      --i-tables table_plate4.qza \
+      --i-tables table_plate7.qza \
+      --i-tables table_plate8.qza \
+      --i-tables table_plate9.qza \
+      --i-tables table_plate10.qza \
+      --i-tables table_plate11.qza \
+      --i-tables table_plate12.qza \
+      --i-tables table_plate13.qza \
+      --i-tables table_plate14.qza \
+      --i-tables table_plate17.qza \
+      --p-overlap-method sum \
+      --o-merged-table merged-table
+      
+    qiime feature-table summarize \
+        --i-table merged-table.qza \
+        --m-sample-metadata-file mdat.txt \
+        --o-visualization merged-table
+
+    qiime feature-table merge-seqs \
+      --i-data rep-seqs_plate1.qza \
+      --i-data rep-seqs_plate2.qza \
+      --i-data rep-seqs_plate3.qza \
+      --i-data rep-seqs_plate4.qza \
+      --i-data rep-seqs_plate7.qza \
+      --i-data rep-seqs_plate8.qza \
+      --i-data rep-seqs_plate9.qza \
+      --i-data rep-seqs_plate10.qza \
+      --i-data rep-seqs_plate11.qza \
+      --i-data rep-seqs_plate12.qza \
+      --i-data rep-seqs_plate13.qza \
+      --i-data rep-seqs_plate14.qza \
+      --i-data rep-seqs_plate17.qza \
+      --o-merged-data merged-rep-seqs.qza
+      
+    qiime feature-table tabulate-seqs \
+      --i-data merged-rep-seqs.qza \
+      --o-visualization merged-rep-seqs
+
+Note: making the merged feature table .qzv file took a long time (an
+hour maybe).
+
+## 5. Assign taxonomy
+
+This uses the iterative blast method in the `mktaxa.py` script and a
+reference database that I created for analysing puffin samples in
+December 2021. I made this using ReScript to download fish 12S sequences
+from GenBank, and then added a human and some bird sequences too (as
+likely sources of contamination).
+
+Note, this method only works with an older version of qiime.
+
+    conda activate qiime2-2019.4
+
+    ./mktaxa.py ncbi-refseqs-withHuman.qza ncbi-taxonomy-withHuman.qza merged-rep-seqs.qza
+
+Make a visualisation of the taxonomy file:
+
+    qiime metadata tabulate \
+      --m-input-file superblast_taxonomy.qza \
+      --o-visualization superblast_taxonomy
+
+There are some human and a rodent sequence in there, but the rest is
+either fish or tern, so that’s good.
+
+## 6. Make barplots to eyeball what’s in each sample
+
+Go back to the latest version of qiime that I’m using.
+
+    conda activate qiime2-2021.4
+
+    qiime taxa barplot \
+      --i-table merged-table.qza \
+      --i-taxonomy superblast_taxonomy.qza \
+      --m-metadata-file mdat.txt \
+      --o-visualization barplot_before_filtering.qzv
+
+Bird, mammal, and unnasigned sequences are really low in abundance, so
+that’s good. I’ll filter them out in the next step.
+
+## 7. Remove non-fish reads
+
+    qiime taxa filter-table \
+      --i-table merged-table.qza \
+      --i-taxonomy superblast_taxonomy.qza \
+      --p-exclude Unassigned,Aves,Mammalia \
+      --o-filtered-table merged_table_noBirdsMammalsUnassigned.qza
+      
+    qiime feature-table summarize \
+        --i-table merged_table_noBirdsMammalsUnassigned.qza \
+        --m-sample-metadata-file mdat.txt \
+        --o-visualization merged_table_noBirdsMammalsUnassigned
+        
+    qiime taxa barplot \
+      --i-table merged_table_noBirdsMammalsUnassigned.qza \
+      --i-taxonomy superblast_taxonomy.qza \
+      --m-metadata-file mdat.txt \
+      --o-visualization barplot_noBirdsMammalsUnassigned.qzv
+
+## 8. Calculate alpha-rarefaction curves
+
+Starting with a broad range of 100 and 2000 sequences. Collapse the
+taxonomy to the species-level first (since we don’t care about ASV
+diversity).
+
+    qiime taxa collapse \
+      --i-table merged_table_noBirdsMammalsUnassigned.qza \
+      --i-taxonomy superblast_taxonomy.qza \
+      --p-level 7 \
+      --o-collapsed-table merged_table_noBirdsMammalsUnassigned_collapsed.qza
+
+    qiime diversity alpha-rarefaction \
+      --i-table merged_table_noBirdsMammalsUnassigned_collapsed.qza \
+      --m-metadata-file mdat.txt \
+      --p-min-depth 100 \
+      --p-max-depth 2000 \
+      --o-visualization alpha-rarefaction-100-2000
+
+It looks like 300-500 is roughly correct. Zoom in on this range further.
+
+    qiime diversity alpha-rarefaction \
+      --i-table merged_table_noBirdsMammalsUnassigned_collapsed.qza \
+      --m-metadata-file mdat.txt \
+      --p-min-depth 100 \
+      --p-max-depth 800 \
+      --o-visualization alpha-rarefaction-100-800
+
+400 reads will retain as many samples as possible while capturing the
+species richness in the samples.
+
+## 9. Rarefy to a depth of 400 and redo barplots
+
+    qiime feature-table rarefy \
+      --i-table merged_table_noBirdsMammalsUnassigned.qza \
+      --p-sampling-depth 400 \
+      --o-rarefied-table merged_table_noBirdsMammalsUnassigned_rarefied400
+      
+    qiime taxa barplot \
+      --i-table merged_table_noBirdsMammalsUnassigned_rarefied400.qza \
+      --i-taxonomy superblast_taxonomy.qza \
+      --m-metadata-file mdat.txt \
+      --o-visualization barplot_noBirdsMammalsUnassigned_rarefied400.qzv
+
+## 10. Select samples for visual vs fecal comparisons
+
+Select just the COTE chick samples from Shoals that were collected in
+2017, 2018, and 2019.
+
+    qiime feature-table filter-samples \
+      --i-table merged_table_noBirdsMammalsUnassigned_rarefied400.qza \
+      --m-metadata-file mdat.txt \
+      --p-where "Species='COTE' AND Age='CHICK' AND Colony='SEAVEY'" \
+      --o-filtered-table VisualVSFecalData/table_COTE_Chicks_Seavey_rarefied400.qza \
+      --verbose
+      
+    qiime feature-table filter-seqs \
+      --i-data merged-rep-seqs.qza \
+      --i-table VisualVSFecalData/table_COTE_Chicks_Seavey_rarefied400.qza \
+      --o-filtered-data VisualVSFecalData/rep-seqs_COTE_Chicks_Seavey_rarefied400.qza
+
+Make the visualizations to go with these:
+
+    qiime feature-table summarize \
+        --i-table VisualVSFecalData/table_COTE_Chicks_Seavey_rarefied400.qza \
+        --m-sample-metadata-file mdat.txt \
+        --o-visualization VisualVSFecalData/table_COTE_Chicks_Seavey_rarefied400
+
+    qiime feature-table tabulate-seqs \
+        --i-data VisualVSFecalData/rep-seqs_COTE_Chicks_Seavey_rarefied400.qza \
+        --o-visualization VisualVSFecalData/rep-seqs_COTE_Chicks_Seavey_rarefied400   
+
+Redo barplots
+
+    qiime taxa barplot\
+          --i-table VisualVSFecalData/table_COTE_Chicks_Seavey_rarefied400.qza \
+          --i-taxonomy superblast_taxonomy.qza\
+          --m-metadata-file mdat.txt\
+          --o-visualization VisualVSFecalData/barplot_COTE_Chicks_Seavey_rarefied400
+
+Final steps: downloaded the CSV, made taxonomy edits, and calculated FOO
+and RRA in the sheet
+`COTE_Chicks_Seavey_rarefied400_taxonomyedited.xlsx` which is in the
+folder `MiFish/VisualVSFecalData`. I saved the summary table of FOO and
+RRA in a file called `FOO_RRA_COTEchicks2017-2019.xlsx`.
