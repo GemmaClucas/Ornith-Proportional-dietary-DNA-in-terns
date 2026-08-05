@@ -62,18 +62,18 @@ To see how much data passed the filter for each sample:
     done
 
 - Plate 1 ~ 80%.
-- Plate 2 ~ very variable, a lot around 50%.
+- Plate 2 ~ variable, a lot around 50%.
 - Plate 3 ~ 80%.
 - Plate 4 ~ 80%.
 - Plate 7 ~ 75%.  
-- Plate 8 ~ very variable, a lot around 65%.
+- Plate 8 ~ variable, a lot around 65%.
 - Plate 9 ~ 75%.
 - Plate 10 ~ 75%.
-- Plate 11 ~ very variable, a lot around 70%.
-- Plate 12 ~ very variable, a lot around 70%.
+- Plate 11 ~ variable, a lot around 70%.
+- Plate 12 ~ variable, a lot around 70%.
 - Plate 13 ~ 70%.
 - Plate 14 ~ 75%.
-- Plate 17 ~ very variable, a lot around 70 %.
+- Plate 17 ~ variable, a lot around 70 %.
 
 ### Trim 5’ ends of reads
 
