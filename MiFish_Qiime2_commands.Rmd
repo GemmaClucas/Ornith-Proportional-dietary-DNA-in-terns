@@ -198,7 +198,84 @@ Note: making the merged feature table .qzv file took a long time (an hour maybe)
 
 ## 5. Assign taxonomy
 
-This uses the iterative blast method in the ```mktaxa.py``` script and a reference database that I created for analysing puffin samples in December 2021. I made this using ReScript to download fish 12S sequences from GenBank, and then added a human and some bird sequences too (as likely sources of contamination).
+### Make a custom reference database
+
+Below is the code I used to create a custom reference database using the RESCRIPt plugin. This database contains all fish 12S and mitochondrial sequences available on GenBank at the time of curation (June 2021), in addition to birds worked on in our lab as possible sources of contamination and/or amplification of host DNA.  
+
+
+Download sequences from GenBank, clean-up (using default settings), and dereplicate:
+```
+qiime rescript get-ncbi-data \
+--p-query '(12s[Title] OR \
+            12S[Title] OR \
+            "small subunit ribosomal RNA gene"[Title] OR \
+            "mitochondrial DNA, complete genome"[Title] AND \
+            ("Chondrichthyes"[Organism] OR \
+            "Dipnomorpha"[Organism] OR \
+            "Actinopterygii"[Organism] OR \
+            "Myxini"[Organism] OR \
+            "Hyperoartia"[Organism] OR \
+            "Coelacanthimorpha"[Organism] OR \
+            fish[All Fields] OR \
+            "Sphenisciformes"[Organism] OR \
+            "Charadriiformes"[Organism] OR \
+            "Procellariiformes[Organism])) \
+            AND mitochondrion[filter]' \
+  --p-n-jobs 5 \
+  --o-sequences ncbi-refseqs-unfiltered.qza \
+  --o-taxonomy ncbi-taxonomy-unfiltered.qza
+
+
+qiime rescript cull-seqs \
+  --i-sequences ncbi-refseqs-unfiltered.qza \
+  --p-num-degenerates 5 \
+  --p-homopolymer-length 8 \
+  --p-n-jobs 4 \
+  --o-clean-sequences ncbi-refseqs-culled
+  
+qiime rescript dereplicate \
+  --i-sequences ncbi-refseqs-culled.qza \
+  --i-taxa ncbi-taxonomy-unfiltered.qza \
+  --p-mode uniq \
+  --p-threads 4 \
+  --o-dereplicated-sequences ncbi-refseqs-culled-derep \
+  --o-dereplicated-taxa ncbi-taxonomy-culled-derep
+```
+
+Export database out of qiime:
+```
+mkdir editing_database
+
+qiime tools export \
+  --input-path ncbi-taxonomy-culled-derep.qza \
+  --output-path editing_database
+  
+qiime tools export \
+  --input-path ncbi-refseqs-culled-derep.qza \
+  --output-path editing_database
+  
+```
+This puts the sequences into `dna-sequences.fasta` and the taxonomy strings into `taxonomy.tsv`. I added a single human mitochondrial sequence that I downloaded from GenBank by pasting it into the fasta file and adding the corresponding taxonomy string to the taxonomy file. I did this by hand as I only need a single human sequence in my reference database to identify possible human contamination.
+
+Import back in to QIIME2:
+```
+qiime tools import \
+  --input-path editing_database/taxonomy.tsv \
+  --output-path editing_database/ncbi-taxonomy-withHuman \
+  --type 'FeatureData[Taxonomy]'
+  
+qiime tools import \
+  --input-path editing_database/dna-sequences.fasta \
+  --output-path editing_database/ncbi-refseqs-withHuman \
+  --type 'FeatureData[Sequence]'  
+```
+
+### Assign taxonomy using custom python script
+
+The custom script uses an iterative BLAST method to take each representative sequence from our samples and blast it 80 times against the custom database, increasing the percent identity incrementally from 70 – 100 %, thus circumventing the limitation of the BLAST method, which keeps only the first hit that meets the search criteria, rather than the best hit. 
+
+The script is available [here](https://github.com/GemmaClucas/UK-Gannets/blob/main/MiFish_2024/mktaxa_singlethreaded.py).
+
 
 Note, this method only works with an older version of qiime.
 ```
