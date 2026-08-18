@@ -332,8 +332,4 @@ Redo barplots
           --m-metadata-file mdat.txt\
           --o-visualization VisualVSFecalData/barplot_COTE_Chicks_Seavey_rarefied400
 
-Final steps: downloaded the CSV, made taxonomy edits, and calculated FOO
-and RRA in the sheet
-`COTE_Chicks_Seavey_rarefied400_taxonomyedited.xlsx` which is in the
-folder `MiFish/VisualVSFecalData`. I saved the summary table of FOO and
-RRA in a file called `FOO_RRA_COTEchicks2017-2019.xlsx`.
+Final steps: downloaded the CSV and made taxonomy edits.
